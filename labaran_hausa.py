@@ -1417,6 +1417,7 @@ class HausaStoriesBot:
 
     def run(self):
         """Start the bot"""
+        keep_alive()
         if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE" or not BOT_TOKEN:
             logger.error("❌ BOT_TOKEN not set! Set it in Render environment variables.")
             return
