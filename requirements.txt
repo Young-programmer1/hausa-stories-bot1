@@ -1,5 +1,6 @@
-python-telegram-bot==13.15
+python-telegram-bot==20.8
 requests==2.31.0
 beautifulsoup4==4.12.2
 gtts==2.5.1
 flask==2.3.3
+Pillow==10.0.1
