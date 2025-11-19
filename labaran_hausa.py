@@ -29,16 +29,18 @@ from keep_alive import keep_alive  # Add this
 import tempfile
 
 # Check if we're running on Railway
-if os.environ.get("RAILWAY_ENVIRONMENT"):
-    # On Railway, use /tmp directory which persists between restarts
+# ========== RENDER COMPATIBILITY ==========
+# On Render, use /tmp for persistent storage
+if os.environ.get("RENDER"):
     MANUAL_STORIES_DIR = "/tmp/manual_stories"
     AUDIO_CACHE_DIR = "/tmp/audio_cache"
-    print("🚂 Running on Railway - Using /tmp directories")
+    DB_PATH = "/tmp/hausa_stories_bots.db"
+    print("🚀 Running on Render")
 else:
-    # Local development
     MANUAL_STORIES_DIR = "manual_stories"
     AUDIO_CACHE_DIR = "audio_cache"
-    print("💻 Running locally - Using local directories")
+    DB_PATH = "hausa_stories_bots.db"
+    print("💻 Running locally")
 
 # Create directories
 os.makedirs(MANUAL_STORIES_DIR, exist_ok=True)
@@ -46,22 +48,31 @@ os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
 
 # ========== CONFIGURATION ==========
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-POLL_INTERVAL = 3600  # 1 hour
-
-# Database path compatibility
-if os.environ.get("RAILWAY_ENVIRONMENT"):
-    DB_PATH = "/tmp/hausa_stories_bots.db"  # Persists on Railway
-else:
-    DB_PATH = "hausa_stories_bots.db"  # Local development
-
+POLL_INTERVAL = 3600
 ADMIN_USER_ID = 6484243337
 
-# ========== LOGGING SETUP ==========
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# ========== LOGGING ==========
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# ========== SIMPLE WEB SERVER FOR RENDER ==========
+try:
+    from flask import Flask
+    app = Flask(__name__)
+
+    @app.route('/')
+    def home():
+        return "🎧 Hausa Stories Bot is running! Use /start on Telegram."
+
+    def run_web_server():
+        port = int(os.environ.get("PORT", 10000))
+        app.run(host='0.0.0.0', port=port)
+        
+except ImportError:
+    # Flask not available, but bot can still work
+    def run_web_server():
+        print("⚠️ Flask not available, but bot will still work")
+
 
 # Search categories users can choose from
 SEARCH_CATEGORIES = {
@@ -1405,59 +1416,55 @@ class HausaStoriesBot:
             )
 
     def run(self):
-        """Main function to start the bot"""
-        keep_alive()  # ADD THIS LINE - keeps bot awake on Railway
-
+        """Start the bot"""
         if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE" or not BOT_TOKEN:
-            logger.error(
-                "❌ BOT_TOKEN not set! Please set it as environment variable:")
-            logger.error("   export BOT_TOKEN='your_actual_bot_token_here'")
+            logger.error("❌ BOT_TOKEN not set! Set it in Render environment variables.")
             return
-
-        # Initialize database (synchronous helper)
+    
+        # Start web server in background (for Render)
+        try:
+            from threading import Thread
+            web_thread = Thread(target=run_web_server)
+            web_thread.daemon = True
+            web_thread.start()
+            logger.info("✅ Web server started for Render")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not start web server: {e}")
+    
+        # Initialize database
         init_db()
-
-        # Create application
+    
+        # Create bot application
         application = Application.builder().token(BOT_TOKEN).build()
-
+    
         # Add handlers
-        application.add_handler(CommandHandler(
-            ["fara", "start"], self.start_cmd))
+        application.add_handler(CommandHandler(["fara", "start"], self.start_cmd))
         application.add_handler(CommandHandler("taimako", self.help_cmd))
         application.add_handler(CommandHandler("nauina", self.categories_cmd))
         application.add_handler(CommandHandler("nema", self.search_cmd))
         application.add_handler(CommandHandler("tsoho", self.history_cmd))
         application.add_handler(CommandHandler("stats", self.stats_cmd))
         application.add_handler(CommandHandler("daina", self.stop_cmd))
-
-        # Callback handlers
-        application.add_handler(CallbackQueryHandler(
-            self.handle_category_selection, pattern="^cat_"))
-        application.add_handler(CallbackQueryHandler(
-            self.handle_history_selection, pattern="^hist_"))
-        application.add_handler(CallbackQueryHandler(
-            self.handle_history_selection, pattern="^close_history"))
+        application.add_handler(CallbackQueryHandler(self.handle_category_selection, pattern="^cat_"))
+        application.add_handler(CallbackQueryHandler(self.handle_history_selection, pattern="^hist_"))
+        application.add_handler(CallbackQueryHandler(self.handle_history_selection, pattern="^close_history"))
         application.add_handler(CommandHandler("shiga", self.add_story_cmd))
-        application.add_handler(CommandHandler(
-            "littafi", self.add_story_file_cmd, filters=filters.User(ADMIN_USER_ID)))
-
-        # Store application reference and set post_init
+        application.add_handler(CommandHandler("littafi", self.add_story_file_cmd, filters=filters.User(ADMIN_USER_ID)))
+    
+        # Setup background job
         self.application = application
-        application.post_init = self.post_init
-
-        logger.info("✅ Hausa Stories Bot with Manual Stories is starting...")
-        print("=" * 60)
-        print("🎧 HAUSA STORIES BOT - MULTI-USER VERSION (FINAL HIGH PERFORMANCE)")
-        print("✅ FULL CONCURRENCY AND JOB QUEUE FIXES APPLIED.")
-        print("=" * 60)
-
+        application.job_queue.run_repeating(
+            self.check_and_send_stories_job,
+            interval=POLL_INTERVAL,
+            first=10
+        )
+    
+        logger.info("✅ Hausa Stories Bot starting on Render...")
+        
         try:
             application.run_polling()
-        except KeyboardInterrupt:
-            logger.info("Bot stopped by user")
         except Exception as e:
-            logger.error(f"Failed to start bot: {e}")
-
+            logger.error(f"Bot failed: {e}")
 
 if __name__ == "__main__":
     bot = HausaStoriesBot()
